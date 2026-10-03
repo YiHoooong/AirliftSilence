@@ -1,3 +1,5 @@
+**English** · [简体中文](README.zh-CN.md)
+
 # AirliftSilence
 
 One-click switch for the iPhone call-recording announcement ("this call is being recorded").
@@ -118,15 +120,3 @@ does or does not announce — get consent before recording anyone.
 
 This is a proof-of-concept for security research on hardware you own. It abuses a real iOS
 vulnerability; Apple can fix it at any time, and the files may be restored by a future iOS update.
-
-## 中文说明
-
-一键开关 iPhone 的「通话录音」提示音。基于 [airlift](https://github.com/0xjohnnydev/airlift) 的
-AirTraffic 沙盒逃逸，把 iOS 在录音开始/结束时播放的两个音频文件换成等长静音文件，可随时还原。
-
-- **要求**：Windows + 已安装 iTunes / Apple Mobile Device Support；iPhone 用数据线连接、解锁并信任
-- **实测**：iOS 27.0.1 (24A446)，读写/替换/还原全部通过，重启后依然有效
-- **用法**：下载 Releases 里的 exe 双击，或 `python airlift_gui.py`。三个按钮：检查设备、去除提示音、恢复提示音
-- **备份**：`%LOCALAPPDATA%\AirliftSilence\backup\`，随时可还原
-- **注意**：提示音是**双方都能听到**的告知。在要求「双方同意」才能录音的法域（德国、美国部分州等），
-  去掉它可能违法。录音前请先取得对方同意。
