@@ -60,6 +60,7 @@ def check_device() -> dict:
             "version": dev["version"],
             "build": dev["build"],
             "tested": dev["tested"],
+            "patched": dev["patched"],
             "udid": dev["udid"],
         }
     return asyncio.run(go())
@@ -213,7 +214,13 @@ class App:
             info = check_device()
             log(f"✓ 已连接：{info['name']} · {info['product']} · "
                 f"iOS {info['version']} ({info['build']})")
-            if not info["tested"]:
+            if info.get("patched"):
+                log(f"✗ 无法使用：iOS {info['version']} 正式版已修补本工具依赖的"
+                    f"漏洞（{airlift.PATCHED_CVE}）。")
+                log("Apple 修复了 AirTraffic 的路径校验漏洞：设备仍会接受同步，"
+                    "但不再执行任何文件移动，去除/恢复提示音都会失败。")
+                log("可用的系统版本：iOS 27.0 / 27.0.1，或 iOS 27.2 beta 1–2。")
+            elif not info["tested"]:
                 log("⚠ 这个 iOS 版本没有在作者的测试列表里，但仍可尝试。")
             self.root.after(0, lambda: self.status.configure(
                 text=f"设备：{info['name']} · iOS {info['version']} ({info['build']})"))
