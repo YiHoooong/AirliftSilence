@@ -448,7 +448,7 @@ async def _resolve_device(requested: str | None = None):
     else:
         print("Connected iPhones:", file=sys.stderr)
         for i, d in enumerate(devices, 1):
-            print(f"  [{i}] {d['name']} · {d['product']} · iOS {d['version']} ({d['build']})", file=sys.stderr)
+            print(f"  [{i}] {d['name']} \u00b7 {d['product']} \u00b7 iOS {d['version']} ({d['build']})", file=sys.stderr)
         while True:
             print("Select: ", end="", file=sys.stderr, flush=True)
             try:
@@ -458,7 +458,7 @@ async def _resolve_device(requested: str | None = None):
             if 1 <= n <= len(devices):
                 dev = devices[n - 1]
                 break
-            print(f"Pick 1–{len(devices)}.", file=sys.stderr)
+            print(f"Pick 1\u2013{len(devices)}.", file=sys.stderr)
 
     if not dev["tested"]:
         _log(f"Warning: iOS {dev['version']} ({dev['build']}) untested.")
