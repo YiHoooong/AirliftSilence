@@ -20,6 +20,15 @@ with silent stand-ins, and can put the originals back.
 Verified end to end on **iOS 27.0.1 (24A446)** — read, replace, restore, and it survives a reboot.
 iOS 27.0 (24A437) should work; older versions are untested.
 
+> [!WARNING]
+> **iOS 27.2 final (24B119) and later are patched.** Apple fixed the ATAirlock
+> path-handling flaw this tool relies on (security release 2026-10-26,
+> CVE-2026-112612): the device still accepts the AirTraffic sync but silently
+> skips every file move, so replace/read fail with `could not read ...` after
+> several minutes. This is not fixable in software — the tool only works on
+> iOS 27.0 / 27.0.1 and iOS 27.2 beta 1–2. On patched firmware the app now
+> detects this and fails fast with a clear message.
+
 ## Quick start
 
 ### Standalone executable
@@ -91,6 +100,21 @@ are published in [AirCard-iOS](https://github.com/Mak5er/AirCard-iOS) and are wh
 in `airlift.py` uses; the first one is enough for 24A446.
 
 So 27.0.1 did not remove the vulnerability — it added a check that ships with a reusable key.
+
+## iOS 27.2: patched
+
+Apple fixed the underlying ATAirlock path-handling flaw in the 2026-10-26 security release
+(CVE-2026-112612, "a path handling issue was addressed with improved validation"). From iOS 27.2
+final (24B119) the device still accepts the AirTraffic sync — including a valid Grappa session —
+but performs none of the requested file moves. The sync API never reports this; the first visible
+symptom is the readback step failing with `could not read ...` several minutes in.
+
+This cannot be worked around from the host side: the same cutoff is confirmed by the other
+airlift-family projects ([AirCard](https://github.com/Mak5er/AirCard),
+[AirCard-Windows](https://github.com/dhava-gautama/AirCard-Windows),
+[AirBeep](https://github.com/LinkPass888/AirBeep) all stop at 27.2 beta 2). The tool now detects
+patched firmware (27.2 final and later; the early 27.2 betas with 5xxx build numbers still work)
+and fails fast with a clear message instead of burning a sync cycle.
 
 ## CLI
 

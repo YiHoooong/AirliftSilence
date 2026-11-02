@@ -19,6 +19,13 @@
 已在 **iOS 27.0.1 (24A446)** 上完整验证 —— 读取、替换、还原全部通过，并且**重启后依然有效**。
 iOS 27.0 (24A437) 应该也可以；更早的版本没有测试过。
 
+> [!WARNING]
+> **iOS 27.2 正式版（24B119）及更高版本已被修补。** Apple 在 2026-10-26 的安全更新中修复了
+> 本工具依赖的 ATAirlock 路径校验漏洞（CVE-2026-112612）：设备仍会接受 AirTraffic 同步，
+> 但会静默跳过所有文件移动，于是替换/读取会在几分钟后报 `could not read ...`。
+> 这无法在软件层面解决 —— 本工具仅支持 iOS 27.0 / 27.0.1 及 iOS 27.2 beta 1–2。
+> 在已修补的系统上，本工具现在会自动识别并直接给出明确提示，不再让您空等。
+
 ## 快速开始
 
 ### 直接下载 exe
@@ -89,6 +96,19 @@ atc{AirTrafficDevice} <ERROR>: Grappa session could not be established. Aborting
 `GRAPPA_TOKENS` 用的就是它们；在 24A446 上第一个就够了。
 
 所以说，**27.0.1 并没有修掉这个漏洞** —— 它只是加了一道锁，而钥匙是通用的。
+
+## iOS 27.2：已被修补
+
+Apple 在 2026-10-26 的安全更新中修复了底层的 ATAirlock 路径校验漏洞
+（CVE-2026-112612，"路径处理问题已通过改进的校验修复"）。从 iOS 27.2 正式版（24B119）起，
+设备仍会接受 AirTraffic 同步——包括合法的 Grappa 会话——但不再执行任何被请求的文件移动。
+同步 API 不会上报这一点，第一个可见的症状是几分钟后读回步骤报 `could not read ...`。
+
+这在主机侧无法绕过：airlift 家族的其他项目（[AirCard](https://github.com/Mak5er/AirCard)、
+[AirCard-Windows](https://github.com/dhava-gautama/AirCard-Windows)、
+[AirBeep](https://github.com/LinkPass888/AirBeep)）都止步于 27.2 beta 2。
+本工具现在会识别已修补的系统（27.2 正式版及更高版本；构建号 5xxx 的早期 27.2 beta 仍可用），
+并快速给出明确提示，而不是白白跑一轮同步。
 
 ## 命令行
 
