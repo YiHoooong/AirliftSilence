@@ -10,6 +10,7 @@ import os
 import platform
 import plistlib
 import posixpath
+import re
 import secrets
 import stat
 import struct
@@ -24,6 +25,45 @@ from pymobiledevice3.services.afc import AfcService
 from pymobiledevice3.usbmux import list_devices as list_mux_devices
 
 TESTED_BUILDS = frozenset({("27.0", "24A435"), ("27.0", "24A5390f")})
+
+# iOS 27.2 shipped Apple's fix for the ATAirlock path-handling flaw this tool
+# relies on (security release 2026-10-26, CVE-2026-112612): the device still
+# accepts the AirTraffic sync but silently performs none of the requested file
+# moves, which is exactly the "sync succeeds, readback fails" symptom. Final
+# 27.2 builds (24B119) are patched; the early 27.2 betas (builds 5xxx, e.g.
+# 24B50xx) predate the fix and still work, as do 27.0 / 27.0.1.
+PATCHED_CVE = "CVE-2026-112612"
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    out = []
+    for part in (v or "").split("."):
+        digits = "".join(ch for ch in part if ch.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out)
+
+
+def firmware_patched(version: str, build: str) -> bool:
+    """True once Apple has shipped the ATAirlock fix on this firmware."""
+    v = _version_tuple(version)
+    if v < (27, 2):
+        return False
+    if v > (27, 2):
+        return True
+    m = re.search(r"(\d+)$", build or "")
+    # Seed/beta builds carry 5xxx+ build numbers; final builds stay below.
+    return not (m and int(m.group(1)) >= 5000)
+
+
+def _patched_message(ios_path: str | None = None) -> str:
+    target = f"\n目标文件：{ios_path}" if ios_path else ""
+    return (
+        f"此 iOS 版本已修补 airlift 漏洞（{PATCHED_CVE}），本工具无法使用。{target}\n"
+        "Apple 在 iOS 27.2 正式版中修复了 AirTraffic 的路径校验漏洞：设备仍会接受同步，"
+        "但不再执行任何文件移动，因此替换和读回都会静默失败——这不是程序故障。\n"
+        "可用的系统版本：iOS 27.0 / 27.0.1，或 iOS 27.2 beta 1–2。"
+    )
+
 AIRLOCK_ROOT = "/var/mobile/Media/Airlock/Book"
 SZ_EXTRA_ID = 0x5A53
 
@@ -240,7 +280,12 @@ def _read_manifest(apple, conn):
             apple.release(key, msg)
             return result
         apple.release(msg)
-        if name in ("SyncFailed", "SyncFinished"):
+        # A SyncFailed here used to be swallowed, which made a rejected sync
+        # look like success and only surface later as a readback timeout.
+        # Propagate it so _atc_sync can rotate through the Grappa tokens.
+        if name == "SyncFailed":
+            raise AirLiftError("device rejected sync")
+        if name == "SyncFinished":
             return None
     return None
 
@@ -380,7 +425,9 @@ async def _resolve_device(requested: str | None = None):
             nm = await ld.get_value(key="DeviceName") or pt
             devices.append({"udid": md.serial, "product": pt, "version": ver,
                             "build": bld, "name": nm,
-                            "tested": (ver, bld) in TESTED_BUILDS, "lockdown": ld})
+                            "tested": (ver, bld) in TESTED_BUILDS,
+                            "patched": firmware_patched(ver, bld),
+                            "lockdown": ld})
         except Exception:
             continue
 
@@ -401,7 +448,7 @@ async def _resolve_device(requested: str | None = None):
     else:
         print("Connected iPhones:", file=sys.stderr)
         for i, d in enumerate(devices, 1):
-            print(f"  [{i}] {d['name']} \u00b7 {d['product']} \u00b7 iOS {d['version']} ({d['build']})", file=sys.stderr)
+            print(f"  [{i}] {d['name']} · {d['product']} · iOS {d['version']} ({d['build']})", file=sys.stderr)
         while True:
             print("Select: ", end="", file=sys.stderr, flush=True)
             try:
@@ -411,14 +458,16 @@ async def _resolve_device(requested: str | None = None):
             if 1 <= n <= len(devices):
                 dev = devices[n - 1]
                 break
-            print(f"Pick 1\u2013{len(devices)}.", file=sys.stderr)
+            print(f"Pick 1–{len(devices)}.", file=sys.stderr)
 
     if not dev["tested"]:
         _log(f"Warning: iOS {dev['version']} ({dev['build']}) untested.")
     _log(f"Device: {dev['name']} ({dev['product']}) iOS {dev['version']} ({dev['build']}) [{dev['udid']}]")
     return dev
 
-async def _write_file(lockdown, apple, udid, ios_path: str, data: bytes):
+async def _write_file(lockdown, apple, udid, ios_path: str, data: bytes, patched: bool = False):
+    if patched:
+        raise AirLiftError(_patched_message(ios_path))
     target_dir = posixpath.dirname(ios_path)
     leaf = posixpath.basename(ios_path)
 
@@ -445,7 +494,9 @@ async def _write_file(lockdown, apple, udid, ios_path: str, data: bytes):
 
     return True
 
-async def _read_file(lockdown, apple, udid, ios_path: str) -> bytes:
+async def _read_file(lockdown, apple, udid, ios_path: str, patched: bool = False) -> bytes:
+    if patched:
+        raise AirLiftError(_patched_message(ios_path))
     target_dir = posixpath.dirname(ios_path)
     leaf = posixpath.basename(ios_path)
 
@@ -477,7 +528,7 @@ async def _read_file(lockdown, apple, udid, ios_path: str) -> bytes:
             await asyncio.sleep(0.25)
     finally:
         if result is not None:
-            await _write_file(lockdown, apple, udid, ios_path, result)
+            await _write_file(lockdown, apple, udid, ios_path, result, patched=patched)
         # Keep the moved-out file in Media if we never managed to read it back.
         await _cleanup(afc, src, lnk, rec if result is not None else None, saved, saved_dirs)
 
@@ -486,13 +537,15 @@ async def _read_file(lockdown, apple, udid, ios_path: str) -> bytes:
     _log(f"Read {len(result)} bytes from {ios_path}")
     return result
 
-async def _replace_file(lockdown, apple, udid, ios_path: str, data: bytes):
+async def _replace_file(lockdown, apple, udid, ios_path: str, data: bytes, patched: bool = False):
     """Swap the contents of an existing file, returning the previous contents.
 
     AirTraffic's move fails when the destination already exists, so the old file is
     moved out to Media first (the same move _read_file relies on) and the new payload
     is then written through the relocated link.
     """
+    if patched:
+        raise AirLiftError(_patched_message(ios_path))
     target_dir = posixpath.dirname(ios_path)
     leaf = posixpath.basename(ios_path)
 
@@ -549,14 +602,16 @@ def write_file(ios_path: str, data: bytes, device: str | None = None) -> bool:
     ios_path = _validate_path(ios_path)
     async def go():
         apple, dev = await _connect(device)
-        return await _write_file(dev["lockdown"], apple, dev["udid"], ios_path, data)
+        return await _write_file(dev["lockdown"], apple, dev["udid"], ios_path, data,
+                                 patched=dev["patched"])
     return asyncio.run(go())
 
 def read_file(ios_path: str, device: str | None = None) -> bytes:
     ios_path = _validate_path(ios_path)
     async def go():
         apple, dev = await _connect(device)
-        return await _read_file(dev["lockdown"], apple, dev["udid"], ios_path)
+        return await _read_file(dev["lockdown"], apple, dev["udid"], ios_path,
+                                patched=dev["patched"])
     return asyncio.run(go())
 
 def replace_file(ios_path: str, data: bytes, device: str | None = None) -> bytes | None:
@@ -564,7 +619,8 @@ def replace_file(ios_path: str, data: bytes, device: str | None = None) -> bytes
     ios_path = _validate_path(ios_path)
     async def go():
         apple, dev = await _connect(device)
-        return await _replace_file(dev["lockdown"], apple, dev["udid"], ios_path, data)
+        return await _replace_file(dev["lockdown"], apple, dev["udid"], ios_path, data,
+                                   patched=dev["patched"])
     return asyncio.run(go())
 
 USAGE = """\
