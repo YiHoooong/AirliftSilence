@@ -1,0 +1,1 @@
+Fixes the sync reliability issues behind the common could-not-read error; adds a rescue command for files stranded in Media; adds a firmware gate for the iOS 27.2+ patch (CVE-2026-112612). Details in the linked PR.

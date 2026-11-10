@@ -14,6 +14,7 @@ import threading
 import traceback
 from pathlib import Path
 import tkinter as tk
+from tkinter import messagebox, scrolledtext
 from tkinter.scrolledtext import ScrolledText
 
 import airlift
@@ -65,19 +66,36 @@ def check_device() -> dict:
     return asyncio.run(go())
 
 
-def ensure_firmware(info: dict) -> None:
-    """Fail fast on firmware builds where the move has been patched."""
-    if airlift.firmware_patched(info["version"]):
-        raise airlift.AirLiftError(
-            f"iOS {info['version']} 已修补 AirTraffic 资产搬运（CVE-2026-112612）。\n"
-            "这个工具在该版本上无法使用；设备不会有任何文件被修改。"
-        )
+def ensure_firmware(info: dict, log) -> None:
+    """Warn about patched firmware and let the user explicitly force a try."""
+    if not airlift.firmware_patched(info["version"]):
+        return
+    if airlift.ALLOW_PATCHED:
+        log(f"⚠ iOS {info['version']} 已修补（CVE-2026-112612），按你先前的确认继续尝试。")
+        return
+    log(f"⚠ iOS {info['version']} 已修补 AirTraffic 资产搬运（CVE-2026-112612）。")
+    log("  苹果在 27.2 起加强了路径校验，搬运请求预计会被设备全部拒绝。")
+    log("  版本号判断不等于实机实测——你可以选择强制验证一次：")
+    log("  无论结果如何，设备上的文件都不会丢失，滞留的副本用「④ 救援」即可恢复。")
+    proceed = messagebox.askyesno(
+        APP_NAME,
+        f"你的 iPhone 是 iOS {info['version']}。\n\n"
+        "苹果在 iOS 27.2 已修补本工具依赖的漏洞（CVE-2026-112612），\n"
+        "27.3 上预计每个搬运动作都会被设备拒绝，工具无法完成任务。\n\n"
+        "但实测没有破坏性：文件最多被移入 Media 暂存区，「④ 救援」可原样放回。\n\n"
+        "仍要忽略警告，强制实测一次吗？",
+        icon="warning",
+    )
+    if not proceed:
+        raise airlift.AirLiftError(f"你选择了不继续（iOS {info['version']}，已修补）。设备未做任何修改。")
+    airlift.ALLOW_PATCHED = True
+    log("已确认强制尝试：本会话内后续操作不再重复询问。")
 
 
 # ── operations ───────────────────────────────────────────────────────────────
 
 def remove_sounds(log) -> None:
-    ensure_firmware(check_device())
+    ensure_firmware(check_device(), log)
     for name, label in TARGETS:
         path = f"{GREETINGS}/{name}"
         source = silent_file(name)
@@ -111,7 +129,7 @@ def remove_sounds(log) -> None:
 
 
 def restore_sounds(log) -> None:
-    ensure_firmware(check_device())
+    ensure_firmware(check_device(), log)
     for name, label in TARGETS:
         path = f"{GREETINGS}/{name}"
         backup = backup_file(name)
@@ -140,7 +158,19 @@ def restore_sounds(log) -> None:
 
 
 def rescue_files(log) -> None:
-    log("正在扫描 Media 暂存区…")
+    log("正在扫描 Media 暂存区（只读，不改动设备）…")
+    stranded = airlift.list_stranded()
+    if not stranded:
+        log("暂存区是干净的 —— 没有滞留文件。")
+        return
+    for entry in stranded:
+        size = entry.get("size")
+        size = f"{size} bytes" if size is not None else "?"
+        log(f"  发现 {entry['mediaFile']}（{size}）→ {entry.get('target') or '路径无法识别'}")
+        if entry.get("error"):
+            log(f"    ⚠ {entry['error']}")
+    ensure_firmware(check_device(), log)
+    log("开始把滞留文件放回设备并读回校验…")
     found = airlift.rescue_files(log)
     if found:
         log("\n提示：如果同时救援出了静音文件和原版提示音，最后恢复的那个会生效。")
@@ -248,15 +278,16 @@ class App:
             info = check_device()
             log(f"✓ 已连接：{info['name']} · {info['product']} · "
                 f"iOS {info['version']} ({info['build']})")
-            if airlift.firmware_patched(info["version"]):
-                log("✗ iOS 27.2 及以上版本已修补此漏洞（CVE-2026-112612），工具不可用。")
-                log("  ②③④ 已被阻断；你的设备不会有任何文件被修改。")
-                return
-            if not info["tested"]:
+            patched = airlift.firmware_patched(info["version"])
+            if patched:
+                log("⚠ iOS 27.2+ 已修补此漏洞（CVE-2026-112612）。")
+                log("  ②③④ 会先弹确认框：点「是」可强制实测（零破坏，④ 可回收残留）。")
+            elif not info["tested"]:
                 log(f"⚠ iOS {info['version']} ({info['build']}) 不在作者已验证的列表里，"
                     "仍可尝试；如遇失败，把日志发出来一起看。")
-            self.root.after(0, lambda: self.status.configure(
-                text=f"设备：{info['name']} · iOS {info['version']} ({info['build']})"))
+            label = (f"设备：{info['name']} · iOS {info['version']} ({info['build']})"
+                     + (" · 已修补" if patched else ""))
+            self.root.after(0, lambda: self.status.configure(text=label))
         self.run_job("检查设备", job)
 
     def on_remove(self) -> None:
