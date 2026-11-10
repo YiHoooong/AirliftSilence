@@ -1,0 +1,1 @@
+Softens the iOS 27.2+ firmware gate (CVE-2026-112612) into warn + one-time GUI dialog / --allow-patched CLI flag; adds list_stranded() so Media staging is viewable on any firmware; operations remain default-blocked because Apple patched the move in 27.2 per NVD + Apple advisory.

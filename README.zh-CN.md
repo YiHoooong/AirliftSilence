@@ -96,9 +96,28 @@ atc{AirTrafficDevice} <ERROR>: Grappa session could not be established. Aborting
 python airlift.py write   <ios_path> <local_file>              # 写入新文件
 python airlift.py read    <ios_path> <output_file>             # 读取文件（会移出再移回）
 python airlift.py replace <ios_path> <local_file> [--backup P]  # 覆盖已存在的文件
+python airlift.py rescue                                        # 认领滞留在 Media 的文件
 ```
 
 `--device UDID` 跳过设备选择，`--logging` 打印过程日志。
+
+## 故障排除
+
+**`could not read <路径>`** 的含义是：我们请求 AirTraffic 搬运到 Media 的文件，迟迟没有在
+Media 里出现。v1.0.0 用同一句笼统的报错掩盖了三种完全不同的失败：
+
+- 设备上本来就没有这个文件；
+- 设备悄悄拒绝了搬运（固件已修补 —— 见下）；
+- 整个同步没走完（旧代码收不到 AssetManifest 就静默返回，一个文件都不搬，最后把锅甩给文件）。
+
+无论哪种情况都**不会销毁任何东西**：读回失败时，被移出的原版会留在
+`Media\airlift-…` 里；v1.0.1 会把这些副本按完整设备路径命名
+（`airlift-replaced-var_mobile_…_StartDisclosureWithTone.m4a-<token>`），事后可以认领。
+**`python airlift.py rescue`**（GUI 里的「④ 救援」）会扫描 Media 里的滞留文件，
+放回设备上的原位，读回校验确认无误后才删掉暂存副本。
+
+**iOS 27.2 及以上**：苹果修补了 AirTraffic 资产搬运（CVE-2026-112612）。v1.0.1
+会在动手之前直接检测已修补的版本并给出明确提示，而不是删一个文件删到一半才失败。
 
 ## 致谢
 
