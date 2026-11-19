@@ -1,6 +1,6 @@
 """airlift 图形界面 —— 一键开关通话录音提示音。
 
-傻瓜式封装，三个按钮：检查设备/授权、去除提示音、恢复提示音。
+傻瓜式封装，四个按钮：检查设备/授权、去除提示音、恢复提示音、救援残留文件。
 依赖同目录的 airlift.py，以及 Windows 上已安装的 Apple Mobile Device Support。
 """
 
@@ -14,6 +14,7 @@ import threading
 import traceback
 from pathlib import Path
 import tkinter as tk
+from tkinter import messagebox, scrolledtext
 from tkinter.scrolledtext import ScrolledText
 
 import airlift
@@ -65,9 +66,36 @@ def check_device() -> dict:
     return asyncio.run(go())
 
 
+def ensure_firmware(info: dict, log) -> None:
+    """Warn about patched firmware and let the user explicitly force a try."""
+    if not airlift.firmware_patched(info["version"]):
+        return
+    if airlift.ALLOW_PATCHED:
+        log(f"⚠ iOS {info['version']} 已修补（CVE-2026-112612），按你先前的确认继续尝试。")
+        return
+    log(f"⚠ iOS {info['version']} 已修补 AirTraffic 资产搬运（CVE-2026-112612）。")
+    log("  苹果在 27.2 起加强了路径校验，搬运请求预计会被设备全部拒绝。")
+    log("  版本号判断不等于实机实测——你可以选择强制验证一次：")
+    log("  无论结果如何，设备上的文件都不会丢失，滞留的副本用「④ 救援」即可恢复。")
+    proceed = messagebox.askyesno(
+        APP_NAME,
+        f"你的 iPhone 是 iOS {info['version']}。\n\n"
+        "苹果在 iOS 27.2 已修补本工具依赖的漏洞（CVE-2026-112612），\n"
+        "27.3 上预计每个搬运动作都会被设备拒绝，工具无法完成任务。\n\n"
+        "但实测没有破坏性：文件最多被移入 Media 暂存区，「④ 救援」可原样放回。\n\n"
+        "仍要忽略警告，强制实测一次吗？",
+        icon="warning",
+    )
+    if not proceed:
+        raise airlift.AirLiftError(f"你选择了不继续（iOS {info['version']}，已修补）。设备未做任何修改。")
+    airlift.ALLOW_PATCHED = True
+    log("已确认强制尝试：本会话内后续操作不再重复询问。")
+
+
 # ── operations ───────────────────────────────────────────────────────────────
 
 def remove_sounds(log) -> None:
+    ensure_firmware(check_device(), log)
     for name, label in TARGETS:
         path = f"{GREETINGS}/{name}"
         source = silent_file(name)
@@ -80,7 +108,10 @@ def remove_sounds(log) -> None:
 
         backup = backup_file(name)
         if previous is None:
-            log(f"[{label}] ⚠ 没能读回原文件（可能设备上本来就没有），无法备份")
+            log(f"[{label}] ⚠ 没能读回被移走的文件：")
+            log(f"[{label}]   原因可能是设备上原本没有这个文件，或设备拒绝了搬运（疑似已修补，"
+                "请先看 ① 检查设备 的提示）。移出的文件滞留在 Media 暂存区，")
+            log(f"[{label}]   点击「④ 救援」可以认领并放回。")
         elif previous == silent:
             log(f"[{label}] 设备上本来就是静音版")
             if not backup.is_file():
@@ -98,14 +129,24 @@ def remove_sounds(log) -> None:
 
 
 def restore_sounds(log) -> None:
+    ensure_firmware(check_device(), log)
     for name, label in TARGETS:
         path = f"{GREETINGS}/{name}"
         backup = backup_file(name)
         if not backup.is_file():
-            raise airlift.AirLiftError(
-                f"{label}：找不到原版备份。\n"
-                f"恢复需要先前用本工具备份过的文件：\n{backup}"
-            )
+            log(f"[{label}] 本地没有原版备份，尝试从 Media 暂存区救援…")
+            found = airlift.rescue_files(log)
+            for entry in found:
+                if (entry.get("target", "").endswith(name)
+                        and entry.get("restored") and entry.get("data")):
+                    backup.write_bytes(entry["data"])
+                    log(f"[{label}] 已从暂存区恢复原文件，并将其保存为本地备份")
+                    break
+            else:
+                raise airlift.AirLiftError(
+                    f"{label}：找不到原版备份，暂存区也没有可救援的文件。\n"
+                    f"恢复需要先前用本工具备份过的文件：{backup}"
+                )
 
         original = backup.read_bytes()
         log(f"[{label}] 正在恢复（约 1 分钟）…")
@@ -114,6 +155,26 @@ def restore_sounds(log) -> None:
         if airlift.read_file(path) != original:
             raise airlift.AirLiftError(f"{label}：校验失败，恢复未生效")
         log(f"[{label}] ✓ 已恢复原版")
+
+
+def rescue_files(log) -> None:
+    log("正在扫描 Media 暂存区（只读，不改动设备）…")
+    stranded = airlift.list_stranded()
+    if not stranded:
+        log("暂存区是干净的 —— 没有滞留文件。")
+        return
+    for entry in stranded:
+        size = entry.get("size")
+        size = f"{size} bytes" if size is not None else "?"
+        log(f"  发现 {entry['mediaFile']}（{size}）→ {entry.get('target') or '路径无法识别'}")
+        if entry.get("error"):
+            log(f"    ⚠ {entry['error']}")
+    ensure_firmware(check_device(), log)
+    log("开始把滞留文件放回设备并读回校验…")
+    found = airlift.rescue_files(log)
+    if found:
+        log("\n提示：如果同时救援出了静音文件和原版提示音，最后恢复的那个会生效。")
+        log("想达成确定状态，请再点一次 ② 去除提示音 或 ③ 恢复提示音。")
 
 
 # ── gui ──────────────────────────────────────────────────────────────────────
@@ -125,8 +186,8 @@ class App:
         self.busy = False
 
         root.title(APP_NAME)
-        root.geometry("680x460")
-        root.minsize(560, 380)
+        root.geometry("720x460")
+        root.minsize(600, 380)
 
         header = tk.Label(root, text=APP_NAME, font=("Microsoft YaHei UI", 16, "bold"))
         header.pack(pady=(14, 2))
@@ -138,16 +199,20 @@ class App:
         buttons.pack(pady=4)
 
         self.btn_check = tk.Button(
-            buttons, text="① 检查设备 / 授权", width=18, height=2,
+            buttons, text="① 检查设备 / 授权", width=17, height=2,
             font=("Microsoft YaHei UI", 11), command=self.on_check)
         self.btn_remove = tk.Button(
-            buttons, text="② 去除提示音", width=18, height=2,
+            buttons, text="② 去除提示音", width=15, height=2,
             font=("Microsoft YaHei UI", 11), command=self.on_remove)
         self.btn_restore = tk.Button(
-            buttons, text="③ 恢复提示音", width=18, height=2,
+            buttons, text="③ 恢复提示音", width=15, height=2,
             font=("Microsoft YaHei UI", 11), command=self.on_restore)
-        for i, b in enumerate((self.btn_check, self.btn_remove, self.btn_restore)):
-            b.grid(row=0, column=i, padx=6)
+        self.btn_rescue = tk.Button(
+            buttons, text="④ 救援残留文件", width=17, height=2,
+            font=("Microsoft YaHei UI", 11), command=self.on_rescue)
+        for i, b in enumerate((self.btn_check, self.btn_remove,
+                               self.btn_restore, self.btn_rescue)):
+            b.grid(row=0, column=i, padx=5)
 
         tip = tk.Label(
             root, fg="#555", justify="left", font=("Microsoft YaHei UI", 9),
@@ -183,7 +248,7 @@ class App:
     def set_busy(self, busy: bool) -> None:
         self.busy = busy
         state = "disabled" if busy else "normal"
-        for b in (self.btn_check, self.btn_remove, self.btn_restore):
+        for b in (self.btn_check, self.btn_remove, self.btn_restore, self.btn_rescue):
             b.configure(state=state)
         self.root.configure(cursor="watch" if busy else "")
 
@@ -213,10 +278,16 @@ class App:
             info = check_device()
             log(f"✓ 已连接：{info['name']} · {info['product']} · "
                 f"iOS {info['version']} ({info['build']})")
-            if not info["tested"]:
-                log("⚠ 这个 iOS 版本没有在作者的测试列表里，但仍可尝试。")
-            self.root.after(0, lambda: self.status.configure(
-                text=f"设备：{info['name']} · iOS {info['version']} ({info['build']})"))
+            patched = airlift.firmware_patched(info["version"])
+            if patched:
+                log("⚠ iOS 27.2+ 已修补此漏洞（CVE-2026-112612）。")
+                log("  ②③④ 会先弹确认框：点「是」可强制实测（零破坏，④ 可回收残留）。")
+            elif not info["tested"]:
+                log(f"⚠ iOS {info['version']} ({info['build']}) 不在作者已验证的列表里，"
+                    "仍可尝试；如遇失败，把日志发出来一起看。")
+            label = (f"设备：{info['name']} · iOS {info['version']} ({info['build']})"
+                     + (" · 已修补" if patched else ""))
+            self.root.after(0, lambda: self.status.configure(text=label))
         self.run_job("检查设备", job)
 
     def on_remove(self) -> None:
@@ -232,6 +303,12 @@ class App:
             restore_sounds(log)
             log("\n全部完成。提示音已恢复为系统原版。")
         self.run_job("恢复提示音", job)
+
+    def on_rescue(self) -> None:
+        def job(log):
+            rescue_files(log)
+            log("\n救援结束。")
+        self.run_job("救援残留文件", job)
 
 
 def main() -> int:

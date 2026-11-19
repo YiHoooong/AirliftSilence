@@ -98,9 +98,32 @@ So 27.0.1 did not remove the vulnerability — it added a check that ships with 
 python airlift.py write   <ios_path> <local_file>              # write a new file
 python airlift.py read    <ios_path> <output_file>             # read a file (moves it out and back)
 python airlift.py replace <ios_path> <local_file> [--backup P]  # overwrite an existing file
+python airlift.py rescue                                        # restore files stranded in Media
 ```
 
 `--device UDID` skips the device picker, `--logging` prints progress.
+
+## Troubleshooting
+
+**`could not read <path>`** means the file we asked AirTraffic to move into Media never
+showed up there. v1.0.0 answered this with the same generic message for three different
+failures:
+
+- the file genuinely does not exist at that path,
+- the device silently refused the move (patched firmware — see below), or
+- the sync never completed (the original code bailed out silently when no asset manifest
+  arrived — dispatching *zero* moves — and then blamed the file).
+
+Nothing is destroyed in any of those cases: a failed read leaves the moved copy in
+`Media\airlift-…` untouched; v1.0.1 names those copies after their full device path
+(`airlift-replaced-var_mobile_…_StartDisclosureWithTone.m4a-<token>`) so they can be
+claimed later. **`python airlift.py rescue`** (GUI button ④) scans Media for stranded
+copies, restores them to the device, verifies each restore by reading back, and only
+then removes the staging copy.
+
+**iOS 27.2+**: Apple patched the AirTraffic asset move (CVE-2026-112612). v1.0.1
+detects patched builds up front and refuses to operate with a clear message instead of
+failing halfway through a replacement.
 
 ## Credits
 
