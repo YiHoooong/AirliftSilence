@@ -1,0 +1,75 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymobiledevice3 pyinstaller
+
+      - name: Syntax check
+        shell: pwsh
+        run: python -m py_compile airlift.py airlift_gui.py
+
+      - name: Build executable
+        shell: pwsh
+        run: |
+          pyinstaller --onefile --windowed --name AirliftSilence `
+            --add-data "silent/StartDisclosureWithTone.m4a;silent" `
+            --add-data "silent/StopDisclosure.caf;silent" `
+            airlift_gui.py
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirliftSilence-windows
+          path: dist/AirliftSilence.exe
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $exe = "dist/AirliftSilence.exe"
+          $hash = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
+          $size = "{0:N0}" -f (Get-Item $exe).Length
+
+          $notes = @(
+            "### Checksum",
+            '```',
+            "sha256  $hash",
+            "size    $size bytes",
+            '```'
+          ) -join "`n"
+
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag $exe --clobber
+          } else {
+            gh release create $tag $exe `
+              --title "AirliftSilence $tag" `
+              --generate-notes `
+              --notes $notes
+          }
