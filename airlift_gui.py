@@ -14,7 +14,7 @@ import threading
 import traceback
 from pathlib import Path
 import tkinter as tk
-from tkinter import messagebox, scrolledtext
+from tkinter import messagebox
 from tkinter.scrolledtext import ScrolledText
 
 import airlift
@@ -61,30 +61,33 @@ def check_device() -> dict:
             "version": dev["version"],
             "build": dev["build"],
             "tested": dev["tested"],
+            "patched": dev["patched"],
             "udid": dev["udid"],
         }
     return asyncio.run(go())
 
 
-def ensure_firmware(info: dict, log) -> None:
+def ensure_firmware(info: dict, log, confirm=None) -> None:
     """Warn about patched firmware and let the user explicitly force a try."""
-    if not airlift.firmware_patched(info["version"]):
+    if not airlift.firmware_patched(info["version"], info.get("build", "")):
         return
     if airlift.ALLOW_PATCHED:
-        log(f"⚠ iOS {info['version']} 已修补（CVE-2026-112612），按你先前的确认继续尝试。")
+        log(f"⚠ iOS {info['version']} ({info['build']}) 已修补（CVE-2026-112612），按你先前的确认继续尝试。")
         return
-    log(f"⚠ iOS {info['version']} 已修补 AirTraffic 资产搬运（CVE-2026-112612）。")
-    log("  苹果在 27.2 起加强了路径校验，搬运请求预计会被设备全部拒绝。")
+    log(f"⚠ iOS {info['version']} ({info['build']}) 已修补 AirTraffic 资产搬运（CVE-2026-112612）。")
+    log("  苹果在 iOS 27.2 正式版（24B119）起加强了路径校验，搬运请求预计会被设备全部拒绝。")
+    log("  可用的系统版本：iOS 27.0 / 27.0.1，或 iOS 27.2 beta 1–2。")
     log("  版本号判断不等于实机实测——你可以选择强制验证一次：")
     log("  无论结果如何，设备上的文件都不会丢失，滞留的副本用「④ 救援」即可恢复。")
-    proceed = messagebox.askyesno(
+    ask = confirm or (lambda title, msg: messagebox.askyesno(title, msg, icon="warning"))
+    proceed = ask(
         APP_NAME,
-        f"你的 iPhone 是 iOS {info['version']}。\n\n"
-        "苹果在 iOS 27.2 已修补本工具依赖的漏洞（CVE-2026-112612），\n"
-        "27.3 上预计每个搬运动作都会被设备拒绝，工具无法完成任务。\n\n"
+        f"你的 iPhone 是 iOS {info['version']} ({info['build']})。\n\n"
+        "苹果在 iOS 27.2 正式版（24B119）已修补本工具依赖的漏洞（CVE-2026-112612），\n"
+        f"iOS {info['version']} 上预计每个搬运动作都会被设备拒绝，工具无法完成任务。\n"
+        "（可用版本：iOS 27.0 / 27.0.1，或 iOS 27.2 beta 1–2。）\n\n"
         "但实测没有破坏性：文件最多被移入 Media 暂存区，「④ 救援」可原样放回。\n\n"
         "仍要忽略警告，强制实测一次吗？",
-        icon="warning",
     )
     if not proceed:
         raise airlift.AirLiftError(f"你选择了不继续（iOS {info['version']}，已修补）。设备未做任何修改。")
@@ -94,8 +97,8 @@ def ensure_firmware(info: dict, log) -> None:
 
 # ── operations ───────────────────────────────────────────────────────────────
 
-def remove_sounds(log) -> None:
-    ensure_firmware(check_device(), log)
+def remove_sounds(log, confirm=None) -> None:
+    ensure_firmware(check_device(), log, confirm)
     for name, label in TARGETS:
         path = f"{GREETINGS}/{name}"
         source = silent_file(name)
@@ -128,8 +131,8 @@ def remove_sounds(log) -> None:
         log(f"[{label}] ✓ 完成")
 
 
-def restore_sounds(log) -> None:
-    ensure_firmware(check_device(), log)
+def restore_sounds(log, confirm=None) -> None:
+    ensure_firmware(check_device(), log, confirm)
     for name, label in TARGETS:
         path = f"{GREETINGS}/{name}"
         backup = backup_file(name)
@@ -157,7 +160,7 @@ def restore_sounds(log) -> None:
         log(f"[{label}] ✓ 已恢复原版")
 
 
-def rescue_files(log) -> None:
+def rescue_files(log, confirm=None) -> None:
     log("正在扫描 Media 暂存区（只读，不改动设备）…")
     stranded = airlift.list_stranded()
     if not stranded:
@@ -169,7 +172,7 @@ def rescue_files(log) -> None:
         log(f"  发现 {entry['mediaFile']}（{size}）→ {entry.get('target') or '路径无法识别'}")
         if entry.get("error"):
             log(f"    ⚠ {entry['error']}")
-    ensure_firmware(check_device(), log)
+    ensure_firmware(check_device(), log, confirm)
     log("开始把滞留文件放回设备并读回校验…")
     found = airlift.rescue_files(log)
     if found:
@@ -271,6 +274,22 @@ class App:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def ask_yes_no(self, title: str, message: str) -> bool:
+        """Show a confirmation dialog safely on the Tk main thread."""
+        done = threading.Event()
+        result = [False]
+
+        def show():
+            try:
+                result[0] = bool(messagebox.askyesno(
+                    title, message, icon="warning", parent=self.root))
+            finally:
+                done.set()
+
+        self.root.after(0, show)
+        done.wait()
+        return result[0]
+
     # handlers --------------------------------------------------------------
     def on_check(self) -> None:
         def job(log):
@@ -278,9 +297,10 @@ class App:
             info = check_device()
             log(f"✓ 已连接：{info['name']} · {info['product']} · "
                 f"iOS {info['version']} ({info['build']})")
-            patched = airlift.firmware_patched(info["version"])
+            patched = info.get("patched", airlift.firmware_patched(info["version"], info["build"]))
             if patched:
-                log("⚠ iOS 27.2+ 已修补此漏洞（CVE-2026-112612）。")
+                log("⚠ iOS 27.2 正式版（24B119）及以上已修补此漏洞（CVE-2026-112612）。")
+                log("  可用的系统版本：iOS 27.0 / 27.0.1，或 iOS 27.2 beta 1–2。")
                 log("  ②③④ 会先弹确认框：点「是」可强制实测（零破坏，④ 可回收残留）。")
             elif not info["tested"]:
                 log(f"⚠ iOS {info['version']} ({info['build']}) 不在作者已验证的列表里，"
@@ -293,20 +313,20 @@ class App:
     def on_remove(self) -> None:
         def job(log):
             log("开始去除通话录音提示音。")
-            remove_sounds(log)
+            remove_sounds(log, self.ask_yes_no)
             log("\n全部完成。建议现在打个电话试一下录音，确认提示音已消失。")
         self.run_job("去除提示音", job)
 
     def on_restore(self) -> None:
         def job(log):
             log("开始恢复原版提示音。")
-            restore_sounds(log)
+            restore_sounds(log, self.ask_yes_no)
             log("\n全部完成。提示音已恢复为系统原版。")
         self.run_job("恢复提示音", job)
 
     def on_rescue(self) -> None:
         def job(log):
-            rescue_files(log)
+            rescue_files(log, self.ask_yes_no)
             log("\n救援结束。")
         self.run_job("救援残留文件", job)
 

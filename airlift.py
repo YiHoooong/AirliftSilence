@@ -98,10 +98,21 @@ def _version_tuple(version: str) -> tuple[int, ...]:
     return tuple(int(n) for n in nums[:3])
 
 
-def firmware_patched(version: str) -> bool:
-    """True for iOS 27.2+, where the AirTraffic move is patched (CVE-2026-112612)."""
+def firmware_patched(version: str, build: str = "") -> bool:
+    """True for iOS 27.2 final (24B119) and later, where CVE-2026-112612 is patched.
+
+    Early iOS 27.2 betas (5xxx+ builds, e.g. 24B50xx) predate the fix and still work.
+    """
     t = _version_tuple(version)
-    return bool(t) and t[:2] >= PATCHED_MIN
+    if not t:
+        return False
+    ver = (t + (0, 0, 0))[:3]
+    if ver < (27, 2, 0):
+        return False
+    if ver > (27, 2, 0):
+        return True
+    m = re.search(r"(\d+)[a-zA-Z]?$", build or "")
+    return not (m and int(m.group(1)) >= 5000)
 
 
 # ── Apple DLL / CF helpers (unchanged from upstream) ─────────────────────────
@@ -440,7 +451,9 @@ async def _resolve_device(requested: str | None = None):
             nm = await ld.get_value(key="DeviceName") or pt
             devices.append({"udid": md.serial, "product": pt, "version": ver,
                             "build": bld, "name": nm,
-                            "tested": (ver, bld) in TESTED_BUILDS, "lockdown": ld})
+                            "tested": (ver, bld) in TESTED_BUILDS,
+                            "patched": firmware_patched(ver, bld),
+                            "lockdown": ld})
         except Exception:
             continue
 
@@ -473,8 +486,8 @@ async def _resolve_device(requested: str | None = None):
                 break
             print(f"Pick 1\u2013{len(devices)}.", file=sys.stderr)
 
-    if firmware_patched(dev["version"]):
-        _log(f"Note: iOS {dev['version']} is a patched build (CVE-2026-112612).")
+    if dev["patched"]:
+        _log(f"Note: iOS {dev['version']} ({dev['build']}) is a patched build (CVE-2026-112612).")
     if not dev["tested"]:
         _log(f"Warning: iOS {dev['version']} ({dev['build']}) untested.")
     _log(f"Device: {dev['name']} ({dev['product']}) iOS {dev['version']} ({dev['build']}) [{dev['udid']}]")
@@ -659,9 +672,8 @@ async def _rescue_async(lockdown, apple, udid) -> list[dict]:
 
         target = _decode_rescue_name(name)
         if isinstance(target, list):  # anonymous v1.0.0 leftovers: classify by content
-            head4 = data[:4]
-            target = (target[0] if head4 == b"ftyp"
-                      else target[1] if head4 == b"caff"
+            target = (target[0] if data[4:8] == b"ftyp"
+                      else target[1] if data[:4] == b"caff"
                       else None)
         if not target or not _validate_path(target) or target.startswith("/var/mobile/Media"):
             entry["error"] = "could not map this stranded file to a device path"
@@ -753,9 +765,9 @@ def _validate_path(ios_path):
 
 def _gate(dev) -> None:
     """Block operations on patched builds unless the user explicitly forces a try."""
-    if firmware_patched(dev["version"]) and not ALLOW_PATCHED:
+    if firmware_patched(dev["version"], dev.get("build", "")) and not ALLOW_PATCHED:
         raise AirLiftError(
-            PATCHED_TEXT + f" (device: iOS {dev['version']}) "
+            PATCHED_TEXT + f" (device: iOS {dev['version']} ({dev.get('build', '')})) "
             "To force an attempt: pass --allow-patched on the CLI, or confirm the dialog in the GUI."
         )
 

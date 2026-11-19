@@ -20,6 +20,13 @@ with silent stand-ins, and can put the originals back.
 Verified end to end on **iOS 27.0.1 (24A446)** — read, replace, restore, and it survives a reboot.
 iOS 27.0 (24A437) should work; older versions are untested.
 
+> [!WARNING]
+> **iOS 27.2 final (24B119) and later are patched (CVE-2026-112612).** Apple fixed the
+> AirTraffic path-handling flaw: the device still accepts the sync but silently refuses
+> file moves. Only **iOS 27.0 / 27.0.1** and **iOS 27.2 beta 1–2** (5xxx builds) are
+> supported. Patched builds are blocked by default (override with `--allow-patched` or
+> the GUI confirmation dialog).
+
 ## Quick start
 
 ### Standalone executable
