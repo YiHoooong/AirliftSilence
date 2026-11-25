@@ -72,6 +72,12 @@ APPLE_DLL_DIRS = (
     r"C:\Program Files (x86)\Common Files\Apple\Mobile Device Support",
 )
 
+# macOS: the same AirTraffic host API ships as a system private framework. The
+# Windows code loads AirTrafficHost.dll out of iTunes; here the equivalent lives
+# in /System/Library/PrivateFrameworks (still present on macOS 15 Sequoia).
+MACOS_CF_PATH = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+MACOS_AT_PATH = "/System/Library/PrivateFrameworks/AirTrafficHost.framework/AirTrafficHost"
+
 GREETINGS_DIR = "/var/mobile/Library/CallServices/Greetings/default"
 SILENT_START_SIZE = 1455  # bundled silent StartDisclosureWithTone.m4a
 SILENT_STOP_SIZE = 170021  # bundled silent StopDisclosure.caf
@@ -119,20 +125,30 @@ def firmware_patched(version: str, build: str = "") -> bool:
 
 class AppleCF:
     def __init__(self):
-        dll_dir = None
-        for d in APPLE_DLL_DIRS:
-            if os.path.isfile(os.path.join(d, "AirTrafficHost.dll")):
-                dll_dir = d
-                break
-        if not dll_dir:
-            raise AirLiftError("iTunes not installed — need Apple Mobile Device Support DLLs")
+        if sys.platform == "darwin":
+            if not os.path.isfile(MACOS_AT_PATH):
+                raise AirLiftError(
+                    "AirTrafficHost.framework not found — this macOS build dropped the "
+                    "private AirTraffic framework. Nothing can talk to the device's "
+                    "AirTraffic service without it."
+                )
+            self.cf = ctypes.CDLL(MACOS_CF_PATH)
+            self.at = ctypes.CDLL(MACOS_AT_PATH)
+        else:
+            dll_dir = None
+            for d in APPLE_DLL_DIRS:
+                if os.path.isfile(os.path.join(d, "AirTrafficHost.dll")):
+                    dll_dir = d
+                    break
+            if not dll_dir:
+                raise AirLiftError("iTunes not installed — need Apple Mobile Device Support DLLs")
 
-        for d in APPLE_DLL_DIRS:
-            if os.path.isdir(d):
-                os.add_dll_directory(d)
+            for d in APPLE_DLL_DIRS:
+                if os.path.isdir(d):
+                    os.add_dll_directory(d)
 
-        self.cf = ctypes.CDLL(os.path.join(dll_dir, "CoreFoundation.dll"))
-        self.at = ctypes.CDLL(os.path.join(dll_dir, "AirTrafficHost.dll"))
+            self.cf = ctypes.CDLL(os.path.join(dll_dir, "CoreFoundation.dll"))
+            self.at = ctypes.CDLL(os.path.join(dll_dir, "AirTrafficHost.dll"))
 
         vp = ctypes.c_void_p
         for fn, ret, args in [

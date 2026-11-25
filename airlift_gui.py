@@ -26,6 +26,10 @@ TARGETS = (
 )
 APP_NAME = "通话录音提示音开关"
 
+# Windows 有微软雅黑/Consolas；macOS 回退到苹方/Menlo，避免 tkinter 用默认字体。
+UI_FONT_FAMILY = "Microsoft YaHei UI" if sys.platform == "win32" else "PingFang SC"
+MONO_FONT_FAMILY = "Consolas" if sys.platform == "win32" else "Menlo"
+
 
 def base_dir() -> Path:
     """Bundled data lives next to the script, or in PyInstaller's temp dir."""
@@ -192,10 +196,10 @@ class App:
         root.geometry("720x460")
         root.minsize(600, 380)
 
-        header = tk.Label(root, text=APP_NAME, font=("Microsoft YaHei UI", 16, "bold"))
+        header = tk.Label(root, text=APP_NAME, font=(UI_FONT_FAMILY, 16, "bold"))
         header.pack(pady=(14, 2))
 
-        self.status = tk.Label(root, text="设备：未检查", font=("Microsoft YaHei UI", 10))
+        self.status = tk.Label(root, text="设备：未检查", font=(UI_FONT_FAMILY, 10))
         self.status.pack(pady=(0, 10))
 
         buttons = tk.Frame(root)
@@ -203,26 +207,26 @@ class App:
 
         self.btn_check = tk.Button(
             buttons, text="① 检查设备 / 授权", width=17, height=2,
-            font=("Microsoft YaHei UI", 11), command=self.on_check)
+            font=(UI_FONT_FAMILY, 11), command=self.on_check)
         self.btn_remove = tk.Button(
             buttons, text="② 去除提示音", width=15, height=2,
-            font=("Microsoft YaHei UI", 11), command=self.on_remove)
+            font=(UI_FONT_FAMILY, 11), command=self.on_remove)
         self.btn_restore = tk.Button(
             buttons, text="③ 恢复提示音", width=15, height=2,
-            font=("Microsoft YaHei UI", 11), command=self.on_restore)
+            font=(UI_FONT_FAMILY, 11), command=self.on_restore)
         self.btn_rescue = tk.Button(
             buttons, text="④ 救援残留文件", width=17, height=2,
-            font=("Microsoft YaHei UI", 11), command=self.on_rescue)
+            font=(UI_FONT_FAMILY, 11), command=self.on_rescue)
         for i, b in enumerate((self.btn_check, self.btn_remove,
                                self.btn_restore, self.btn_rescue)):
             b.grid(row=0, column=i, padx=5)
 
         tip = tk.Label(
-            root, fg="#555", justify="left", font=("Microsoft YaHei UI", 9),
+            root, fg="#555", justify="left", font=(UI_FONT_FAMILY, 9),
             text="提示：操作期间请保持 iPhone 解锁并连着数据线。每次操作约需 2-4 分钟。")
         tip.pack(pady=(10, 4))
 
-        self.text = ScrolledText(root, height=16, font=("Consolas", 9), wrap="word")
+        self.text = ScrolledText(root, height=16, font=(MONO_FONT_FAMILY, 9), wrap="word")
         self.text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self.text.configure(state="disabled")
 
